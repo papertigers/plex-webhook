@@ -1,19 +1,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 // Parse entire multipart request
-func _retrieveMulipartPayload(r *http.Request) ([]byte, error) {
+func retrieveMulipartPayload(r *http.Request) ([]byte, error) {
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
 		return nil, err
@@ -43,9 +48,45 @@ func _retrieveMulipartPayload(r *http.Request) ([]byte, error) {
 	return nil, nil
 }
 
+func handleEvent(p *PlexPayload) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	cmd := exec.CommandContext(ctx, "./event.sh")
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("PLEX_EVENT=%s", p.Event))
+	env = append(env, fmt.Sprintf("PLEX_USER=%s", p.Account.Title))
+	env = append(env, fmt.Sprintf("PLEX_SERVER=%s", p.Server.Title))
+	env = append(env, fmt.Sprintf("PLEX_PLAYER=%s", p.Player.Title))
+	cmd.Env = env
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatalf("failed to open stdin: %v", err)
+	}
+	go func() {
+		defer stdin.Close()
+		raw, err := json.Marshal(p)
+		if err != nil {
+			log.Fatal(err)
+		}
+		io.WriteString(stdin, string(raw))
+	}()
+	go func() {
+		defer cancel()
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("failed to exec cmd: %v", err)
+		}
+		if err := cmd.Wait(); err != nil {
+			log.Printf("command failed: %v", err)
+			return
+		}
+		log.Println("command exited with 0")
+	}()
+	<-ctx.Done()
+}
+
 // Hook is the handler for the /plex endpoint
 func Hook(w http.ResponseWriter, r *http.Request) {
-	payload, err := _retrieveMulipartPayload(r)
+	payload, err := retrieveMulipartPayload(r)
 	if err != nil {
 		log.Printf("Failed to retrieve data from plex payload: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -57,8 +98,5 @@ func Hook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// TODO: Do something with the event
-	if b, err := json.Marshal(data); err == nil {
-		log.Printf("%v\n", string(b))
-	}
+	go handleEvent(&data)
 }
