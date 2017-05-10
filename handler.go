@@ -50,7 +50,7 @@ func retrieveMulipartPayload(r *http.Request) ([]byte, error) {
 
 func handleEvent(p *PlexPayload) {
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(CommandTimeout)*time.Second)
 	cmd := exec.CommandContext(ctx, CommandPath)
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PLEX_EVENT=%s", p.Event))
